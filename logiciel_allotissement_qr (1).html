@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Allotissement QR – Cuisine centrale</title>
+<script src="https://unpkg.com/html5-qrcode"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+:root{font-family:Arial,sans-serif;color:#202733;background:#f4f6f8}
+body{margin:0;padding:18px;max-width:1000px;margin:auto}
+h1{font-size:26px;margin:8px 0}.sub{color:#586575;margin:0 0 18px}
+.panel{background:white;border:1px solid #dce2e8;border-radius:14px;padding:16px;margin:14px 0;box-shadow:0 2px 8px #1420330a}
+h2{font-size:18px;margin:0 0 12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+label{display:block;font-weight:600;font-size:14px;margin:8px 0 5px}
+input,select,button{font:inherit;padding:11px;border:1px solid #cbd3dc;border-radius:8px;width:100%;box-sizing:border-box}
+button{background:#145b42;color:white;border:0;font-weight:700;cursor:pointer;margin-top:10px}
+button.secondary{background:#e8edf1;color:#263442}
+button.danger{background:#a62e2e}
+#reader{max-width:520px;margin:auto}
+.status{padding:12px;border-radius:9px;background:#eef5f1;margin-top:10px;font-weight:600}
+.pill{display:inline-block;padding:4px 9px;border-radius:20px;background:#e8f2ec;color:#145b42;font-size:12px;font-weight:bold}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{text-align:left;padding:10px;border-bottom:1px solid #e5e9ee}
+th{background:#f2f5f7}
+.tablewrap{overflow-x:auto}
+.qrlist{display:flex;flex-wrap:wrap;gap:12px}
+.qrlabel{border:1px dashed #9aa6b2;border-radius:10px;padding:12px;text-align:center;width:160px;break-inside:avoid}
+.qrlabel b{display:block;margin-bottom:8px}.qrbox{display:flex;justify-content:center}
+.small{font-size:12px;color:#647181;line-height:1.4}
+.actions{display:flex;gap:8px;flex-wrap:wrap}.actions button{flex:1;min-width:130px}
+@media print{body{background:white;padding:0}.noprint{display:none!important}.panel{box-shadow:none;border:0}.qrlabel{width:160px}}
+</style>
+</head>
+<body>
+<h1>Allotissement QR</h1>
+<p class="sub">Cuisine centrale · Suivi des produits par établissement</p>
+
+<section class="panel noprint">
+<h2>1. Scanner les étiquettes</h2>
+<p class="small">Scanne d'abord le QR code du <b>produit</b>, puis celui de l'<b>établissement</b>. Le logiciel crée une ligne dans le tableau.</p>
+<div id="reader"></div>
+<div class="actions">
+<button id="startBtn">Démarrer le scanner</button>
+<button class="secondary" id="stopBtn">Arrêter le scanner</button>
+</div>
+<div class="status" id="status">En attente du QR code produit.</div>
+<div class="grid">
+<div><label>Produit scanné</label><input id="productCurrent" readonly placeholder="En attente…"></div>
+<div><label>Établissement scanné</label><input id="siteCurrent" readonly placeholder="En attente…"></div>
+</div>
+</section>
+
+<section class="panel noprint">
+<h2>2. Ajouter ou préparer les QR codes</h2>
+<div class="grid">
+<div><label>Nom du produit</label><input id="productName" placeholder="Ex. BETTERAVE"></div>
+<div><label>Nom de l'établissement</label><input id="siteName" placeholder="Ex. ÉCOLE LALEVADE"></div>
+</div>
+<button id="makeLabels">Générer les QR codes à imprimer</button>
+<div id="labels" class="qrlist" style="margin-top:14px"></div>
+<p class="small">Les QR codes produits et établissements sont distincts. Imprime et colle le QR « PRODUIT » sur l'étiquette du bac ou du contenant, et garde les QR « ÉTABLISSEMENT » aux postes d'allotissement.</p>
+</section>
+
+<section class="panel">
+<div class="actions noprint" style="align-items:center">
+<h2 style="flex:2;margin:0">3. Tableau des scans</h2>
+<button class="secondary" id="csvBtn">Exporter Excel / CSV</button>
+<button class="secondary" id="printBtn">Imprimer</button>
+</div>
+<div class="tablewrap">
+<table><thead><tr><th>Date / heure</th><th>Produit</th><th>Établissement</th><th>Statut</th></tr></thead>
+<tbody id="rows"><tr><td colspan="4">Aucun scan enregistré.</td></tr></tbody></table>
+</div>
+<div class="actions noprint">
+<button class="secondary" id="undoBtn">Annuler le dernier scan</button>
+<button class="danger" id="clearBtn">Effacer le tableau</button>
+</div>
+<p class="small">Prototype : les données restent dans le navigateur de cet appareil. Pour que plusieurs téléphones/tablettes alimentent un tableau commun en temps réel, il faudra connecter ce logiciel à une base partagée (par exemple Google Sheets).</p>
+</section>
+
+<script>
+let scanner=null, running=false, pendingProduct="";
+const records=[];
+const $=id=>document.getElementById(id);
+function setStatus(s){$('status').textContent=s}
+function parseCode(raw){
+  const s=String(raw||'').trim();
+  if(s.toUpperCase().startsWith('PRODUIT:')) return {type:'product',name:s.slice(8).trim()};
+  if(s.toUpperCase().startsWith('SITE:')) return {type:'site',name:s.slice(5).trim()};
+  return {type:'unknown',name:s};
+}
+function onScan(decoded){
+  const item=parseCode(decoded);
+  if(item.type==='product'){
+    pendingProduct=item.name;
+    $('productCurrent').value=pendingProduct;
+    $('siteCurrent').value='';
+    setStatus('Produit reconnu : '+pendingProduct+'. Scanne maintenant le QR code de l’établissement.');
+  } else if(item.type==='site'){
+    if(!pendingProduct){setStatus('Scanne d’abord un QR code PRODUIT.');return;}
+    $('siteCurrent').value=item.name;
+    records.unshift({date:new Date().toLocaleString('fr-FR'),product:pendingProduct,site:item.name,status:'Scanné'});
+    pendingProduct='';
+    $('productCurrent').value='';
+    render();
+    setStatus('Enregistré : '+records[0].product+' → '+records[0].site+'. Scanne le produit suivant.');
+  } else {
+    setStatus('QR code non reconnu. Utilise un code PRODUIT ou SITE généré par ce logiciel.');
+  }
+}
+$('startBtn').onclick=async()=>{
+ try{
+  if(!scanner) scanner=new Html5Qrcode('reader');
+  if(running)return;
+  await scanner.start({facingMode:'environment'},{fps:10,qrbox:{width:240,height:240}},onScan,()=>{});
+  running=true;setStatus('Scanner actif. Scanne un QR code PRODUIT.');
+ }catch(e){setStatus('Impossible d’ouvrir la caméra. Autorise l’accès caméra ou utilise un autre navigateur. '+e)}
+};
+$('stopBtn').onclick=async()=>{if(scanner&&running){await scanner.stop();running=false;setStatus('Scanner arrêté.')}};
+function render(){
+ const body=$('rows');
+ if(!records.length){body.innerHTML='<tr><td colspan="4">Aucun scan enregistré.</td></tr>';return}
+ body.innerHTML=records.map(r=>`<tr><td>${escapeHtml(r.date)}</td><td><b>${escapeHtml(r.product)}</b></td><td>${escapeHtml(r.site)}</td><td><span class="pill">Scanné</span></td></tr>`).join('');
+}
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+$('makeLabels').onclick=()=>{
+ const p=$('productName').value.trim(),s=$('siteName').value.trim();
+ if(!p&&!s){alert('Saisis un produit et/ou un établissement.');return}
+ const wrap=$('labels');wrap.innerHTML='';
+ if(p)addLabel(wrap,'PRODUIT',p,'PRODUIT:'+p);
+ if(s)addLabel(wrap,'ÉTABLISSEMENT',s,'SITE:'+s);
+};
+function addLabel(parent,type,name,payload){
+ const card=document.createElement('div');card.className='qrlabel';
+ const title=document.createElement('b');title.textContent=type;
+ const nm=document.createElement('div');nm.textContent=name;
+ const qr=document.createElement('div');qr.className='qrbox';
+ card.append(title,nm,qr);parent.append(card);
+ if(window.QRCode){new QRCode(qr,{text:payload,width:120,height:120});}
+ else {qr.textContent=payload+' (recharger pour générer le QR)';}
+}
+$('csvBtn').onclick=()=>{
+ const lines=[['Date / heure','Produit','Établissement','Statut'],...records.map(r=>[r.date,r.product,r.site,r.status])];
+ const csv='\uFEFF'+lines.map(row=>row.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(';')).join('\r\n');
+ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.download='suivi_allotissement.csv';a.click();URL.revokeObjectURL(a.href);
+};
+$('printBtn').onclick=()=>window.print();
+$('undoBtn').onclick=()=>{records.shift();render();setStatus('Dernier scan annulé.');};
+$('clearBtn').onclick=()=>{if(confirm('Effacer toutes les lignes de ce tableau ?')){records.length=0;render();setStatus('Tableau effacé.');}};
+</script>
+</body>
+</html>
